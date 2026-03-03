@@ -1,0 +1,311 @@
+from dataclasses import dataclass
+import random
+import math
+from typing import List
+
+# CLASSE OPZIONE
+
+@dataclass(frozen=True)
+class MissionOption:
+    name: str
+    benefit: float
+    cost: float
+    stress: float
+
+    def __post_init__(self):
+        if self.stress > 0:
+            raise ValueError(
+                f"Incorrect stress value for option '{self.name}': "
+                "stress must be a negative value (such as -0.5)"
+            )
+
+
+# VALORE DELLA MISSIONE
+
+def mission_choice_value(
+    benefit: float,
+    cost: float,
+    stress: float,
+    V1: float = 1.0,
+    V2: float = 1.0,
+    V3: float = 1.0
+) -> float:
+    if stress > 0:
+        raise ValueError("stress must be a negative value (such as -0.5)")
+
+    return V1 * benefit - V2 * cost + V3 * stress
+
+
+# ROBOT 1 – RAZIONALE (MAXIMIZING)
+
+class Robot1_maximizing:
+    def __init__(self,
+        V1: float = 1.0,
+        V2: float = 1.0,
+        V3: float = 1.0
+    ):
+        self.name = "Robot 1"
+        self.V1 = V1
+        self.V2 = V2
+        self.V3 = V3
+
+    def choose_action_Robot1(self, options: List[MissionOption]) -> int:
+        """
+        Sceglie l'opzione con valore massimo secondo mission_choice_value.
+        Ritorna l'indice dell'opzione scelta nella lista 'options'.
+        In caso di pari merito, sceglie casualmente tra le migliori.
+        """
+        values = [
+            mission_choice_value(
+                benefit=o.benefit,
+                cost=o.cost,
+                stress=o.stress,
+                V1=self.V1,
+                V2=self.V2,
+                V3=self.V3
+            )
+            for o in options
+        ]
+
+        best_value = max(values)
+        best_candidates = [i for i, v in enumerate(values) if v == best_value]
+
+        return random.choice(best_candidates)
+
+
+# ROBOT 2 – PROBABILISTICO (VALORE → PROBABILITÀ)
+
+class Robot2_probabilistic:
+    def __init__(self,
+                 V1: float = 1.0,
+                 V2: float = 1.0,
+                 V3: float = 1.0,
+                 instinct: float = 1.25):
+
+
+        self.name = "Robot 2"
+        self.V1 = V1
+        self.V2 = V2
+        self.V3 = V3
+        self.instinct = instinct
+
+    def choose_action_Robot2(self, options: List[MissionOption]) -> int:
+        """Scelta probabilistica via softmax dei valori di missione."""
+        values = [
+            mission_choice_value(o.benefit, o.cost, o.stress, self.V1, self.V2, self.V3)
+            for o in options
+        ]
+
+        # Softmax stabile: sottraiamo il massimo
+        max_v = max(values)
+        weights = [math.exp((v - max_v) / self.instinct) for v in values]
+
+        # Estrai un indice con probabilità proporzionale ai pesi
+        return random.choices(range(len(options)), weights=weights, k=1)[0]
+
+# ROBOT 3 – RANGE-AWARE (UNCERTAINTY)
+
+class Robot3_range_aware:
+    def __init__(self,
+                 V1: float = 1.0,
+                 V2: float = 1.0,
+                 V3: float = 1.0,
+                 range_factor: float = 2.66):
+        """
+        Robot 3 non conosce i valori esatti di benefit, cost e stress.
+        A partire dai valori nominali inseriti, costruisce automaticamente
+        un range di incertezza:
+
+            lower = value / range_factor
+            upper = value * range_factor
+
+        range_factor > 1 controlla l'ampiezza dell'incertezza.
+        """
+
+
+        self.name = "Robot 3"
+        self.V1 = V1
+        self.V2 = V2
+        self.V3 = V3
+        self.range_factor = range_factor
+
+    def _compute_range(self, value: float) -> tuple:
+        """Restituisce (lower_bound, upper_bound) del range."""
+        lower = value / self.range_factor
+        upper = value * self.range_factor
+        return lower, upper
+
+    def choose_action_Robot3(self, options: List[MissionOption]) -> int:
+        """
+        Strategia prudente (worst-case):
+        - costruisce un range per ogni parametro
+        - calcola il LOWER BOUND del valore di missione
+        - sceglie l'opzione con lower bound massimo
+
+        Ritorna l'indice dell'opzione scelta.
+        """
+        lower_bounds = []
+
+        for o in options:
+            benefit_low, benefit_up = self._compute_range(o.benefit)
+            cost_low, cost_up = self._compute_range(o.cost)
+            stress_low, stress_up = self._compute_range(o.stress)
+
+            # Worst-case utility:
+            # benefit -> minimo
+            # cost    -> massimo
+            # stress  -> minimo (più negativo)
+            worst_value = mission_choice_value(
+                benefit=benefit_low,
+                cost=cost_up,
+                stress=stress_low,
+                V1=self.V1,
+                V2=self.V2,
+                V3=self.V3
+            )
+
+            lower_bounds.append(worst_value)
+
+        best_value = max(lower_bounds)
+        best_candidates = [i for i, v in enumerate(lower_bounds) if v == best_value]
+
+        return random.choice(best_candidates)
+
+
+
+# -----------------------------
+# SCENARI (4) + SIMULAZIONE (1000 round) + GRAFICI + TASTO NEXT
+# -----------------------------
+
+
+
+
+
+
+def _read_float_with_retry(prompt: str) -> float:
+    while True:
+        try:
+            return float(input(prompt))
+        except ValueError:
+            print("Invalid input. Please insert a numeric value.")
+
+
+def choice_moment_construction(scenario_id: int) -> List[MissionOption]:
+    print("It's time to explore! Create three options for the robots to choose from.")
+    print(f"""
+=== SCENARIO {scenario_id}/4 ===""")
+    options: List[MissionOption] = []
+
+    for i in range(1, 4):
+        print(f"""
+Option {i}/3""")
+        name = input("  name: ").strip() or f"Option{i}"
+
+        while True:
+            benefit = _read_float_with_retry("  benefit (number): ")
+            cost = _read_float_with_retry("  cost (number): ")
+            stress = _read_float_with_retry("  stress (NEGATIVE number, e.g. -0.5): ")
+
+            try:
+                options.append(MissionOption(name=name, benefit=benefit, cost=cost, stress=stress))
+                break
+            except ValueError as e:
+                print(f"Error: {e}")
+                print("Please reinsert the values for this option.")
+
+    return options
+
+
+def simulate_scenario_1000(options: List[MissionOption],
+                           robot1: Robot1_maximizing,
+                           robot2: Robot2_probabilistic,
+                           robot3: Robot3_range_aware,
+                           rounds: int = 1000) -> dict:
+    """Esegue 'rounds' decisioni per scenario e ritorna conteggi per robot."""
+    counts = {
+        robot1.name: [0, 0, 0],
+        robot2.name: [0, 0, 0],
+        robot3.name: [0, 0, 0]
+    }
+
+    for _ in range(rounds):
+        i1 = robot1.choose_action_Robot1(options)
+        i2 = robot2.choose_action_Robot2(options)
+        i3 = robot3.choose_action_Robot3(options)
+
+        counts[robot1.name][i1] += 1
+        counts[robot2.name][i2] += 1
+        counts[robot3.name][i3] += 1
+
+    return counts
+
+
+def print_scenario_results(options: List[MissionOption], counts: dict, rounds: int = 1000) -> None:
+    print(f"""
+--- RESULTS ---""")
+    option_names = [o.name for o in options]
+
+    for robot_name, c in counts.items():
+        print(f"""
+{robot_name}:""")
+        for opt_name, k in zip(option_names, c):
+            pct = 100.0 * k / rounds
+            print(f"  {opt_name}: {k} ({pct:.1f}%)")
+
+
+def plot_scenario_results(options: List[MissionOption], counts: dict, scenario_id: int, rounds: int = 1000) -> None:
+    """Grafico a barre (percentuali) per i 3 robot sulle 3 opzioni."""
+    option_names = [o.name for o in options]
+    robots = list(counts.keys())
+
+    # percentuali
+    perc = {r: [100.0 * x / rounds for x in counts[r]] for r in robots}
+
+    x = list(range(len(option_names)))  # 0,1,2
+    width = 0.25
+
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    for j, r in enumerate(robots):
+        # barre affiancate
+        xj = [xi + (j - 1) * width for xi in x]
+        plt.bar(xj, perc[r], width=width, label=r)
+
+    plt.xticks(x, option_names)
+    plt.ylim(0, 100)
+    plt.ylabel("Choice probability (%)")
+    plt.title(f"Scenario {scenario_id} — 1000 rounds")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def run_4_scenarios(rounds: int = 1000) -> None:
+    # istanze robot (pesi di default; instinct fisso a 1.25; range_factor 2.66)
+    robot1 = Robot1_maximizing()
+    robot2 = Robot2_probabilistic()  # instinct default = 1.25
+    robot3 = Robot3_range_aware()    # range_factor default = 2.66
+
+    for scenario_id in range(1, 5):
+        options = choice_moment_construction(scenario_id)
+
+        counts = simulate_scenario_1000(
+            options=options,
+            robot1=robot1,
+            robot2=robot2,
+            robot3=robot3,
+            rounds=rounds
+        )
+
+        print_scenario_results(options, counts, rounds=rounds)
+        plot_scenario_results(options, counts, scenario_id=scenario_id, rounds=rounds)
+
+        if scenario_id < 4:
+            input("\nPress ENTER to go to the next scenario...")
+
+    print("\nDone. All 4 scenarios completed.")
+
+
+if __name__ == "__main__":
+    run_4_scenarios(rounds=1000)
